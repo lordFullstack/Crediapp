@@ -1566,7 +1566,40 @@
   </div>
 </div>
 
-<!-- MODAL ABONO -->
+<!-- MODAL REASIGNAR CRÉDITO -->
+<div class="modal-overlay" id="modalReasignar">
+  <div class="modal" style="max-width:460px">
+    <div class="modal-header">
+      <span class="modal-title">🔄 Reasignar Crédito</span>
+      <button class="modal-close" onclick="closeModal('modalReasignar')">✕</button>
+    </div>
+    <div class="modal-body">
+
+      <!-- Info del crédito actual -->
+      <div id="reasignar-info" style="background:var(--bg3);border-radius:10px;padding:14px;margin-bottom:20px;font-size:13px;display:grid;gap:8px"></div>
+
+      <div class="form-grid">
+        <div class="form-group">
+          <label>Asignar a este cliente</label>
+          <select id="reasignar-cliente-sel" style="font-size:13px">
+            <option value="">— Seleccionar cliente correcto —</option>
+          </select>
+        </div>
+
+        <!-- Preview del cliente nuevo -->
+        <div id="reasignar-preview" style="display:none;background:rgba(34,197,94,0.07);border:1px solid rgba(34,197,94,0.2);border-radius:10px;padding:14px;font-size:13px;display:grid;gap:6px"></div>
+
+        <div style="background:rgba(234,179,8,0.07);border:1px solid rgba(234,179,8,0.2);border-radius:8px;padding:10px;font-size:11px;color:var(--muted)">
+          ⚠️ Esto cambia el titular del crédito y todos sus abonos. Los montos y condiciones no se modifican.
+        </div>
+
+        <button class="btn btn-primary" onclick="confirmarReasignar()">✅ Confirmar Reasignación</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+
 
 <div class="modal-overlay" id="modalAbono">
   <div class="modal">
@@ -1890,6 +1923,7 @@ function renderCreditos(filtro = '') {
       <td><span class="badge badge-${c.semaforo}">${semaforoLabel(c.semaforo)}</span></td>
       <td class="actions-td">
         <button class="btn btn-green btn-sm" onclick="openAbono('${c.id}')">💰</button>
+        <button class="btn btn-ghost btn-sm" title="Reasignar cliente" onclick="openReasignar('${c.id}')">🔄</button>
       </td>
     </tr>`;
   }).join('');
@@ -2336,7 +2370,109 @@ function cargarClientesSelect() {
   if (current) sel.value = current;
 }
 
-function filtrarCreditos(v) { renderCreditos(v); }
+// ════════════════════════════════════════
+//  REASIGNAR CRÉDITO
+// ════════════════════════════════════════
+let reasignarCreditoId = null;
+
+function openReasignar(creditoId) {
+  reasignarCreditoId = creditoId;
+  const credito  = DB.creditos.find(c => c.id === creditoId);
+  const clienteActual = DB.clientes.find(c => c.id === credito.clienteId);
+
+  // Info del crédito actual
+  document.getElementById('reasignar-info').innerHTML = `
+    <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:0.6px;margin-bottom:2px">Crédito actual</div>
+    <div style="display:flex;justify-content:space-between">
+      <span style="color:var(--muted)">Cliente actual</span>
+      <strong style="color:var(--red)">${clienteActual?.nombre || '—'}</strong>
+    </div>
+    <div style="display:flex;justify-content:space-between">
+      <span style="color:var(--muted)">Monto prestado</span>
+      <span class="mono">${fmt(credito.montoPrestado)}</span>
+    </div>
+    <div style="display:flex;justify-content:space-between">
+      <span style="color:var(--muted)">Saldo pendiente</span>
+      <span class="mono">${fmt(credito.saldoPendiente)}</span>
+    </div>
+    <div style="display:flex;justify-content:space-between">
+      <span style="color:var(--muted)">Frecuencia</span>
+      <span class="badge badge-blue">${credito.frecuenciaPago}</span>
+    </div>
+  `;
+
+  // Cargar select con todos los clientes excepto el actual
+  const sel = document.getElementById('reasignar-cliente-sel');
+  sel.innerHTML = '<option value="">— Seleccionar cliente correcto —</option>';
+  DB.clientes
+    .filter(c => c.id !== credito.clienteId && c.estado === 'activo')
+    .sort((a,b) => a.nombre.localeCompare(b.nombre))
+    .forEach(c => {
+      sel.innerHTML += `<option value="${c.id}">${c.nombre} — ${c.cedula}</option>`;
+    });
+
+  // Preview al cambiar selección
+  sel.onchange = () => {
+    const preview = document.getElementById('reasignar-preview');
+    if (!sel.value) { preview.style.display = 'none'; return; }
+    const nuevo = DB.clientes.find(c => c.id === sel.value);
+    preview.style.display = 'grid';
+    preview.innerHTML = `
+      <div style="font-size:11px;color:var(--green);font-weight:600;margin-bottom:2px">✅ Nuevo titular</div>
+      <div style="display:flex;justify-content:space-between">
+        <span style="color:var(--muted)">Nombre</span>
+        <strong>${nuevo.nombre}</strong>
+      </div>
+      <div style="display:flex;justify-content:space-between">
+        <span style="color:var(--muted)">Cédula</span>
+        <span class="mono">${nuevo.cedula}</span>
+      </div>
+      <div style="display:flex;justify-content:space-between">
+        <span style="color:var(--muted)">Teléfono</span>
+        <span>${nuevo.telefono}</span>
+      </div>
+    `;
+  };
+
+  // Limpiar preview anterior
+  document.getElementById('reasignar-preview').style.display = 'none';
+  sel.value = '';
+
+  openModal('modalReasignar');
+}
+
+function confirmarReasignar() {
+  const sel          = document.getElementById('reasignar-cliente-sel');
+  const nuevoClienteId = sel.value;
+
+  if (!nuevoClienteId) {
+    toast('⚠️ Selecciona el cliente correcto'); return;
+  }
+
+  const credito       = DB.creditos.find(c => c.id === reasignarCreditoId);
+  const clienteViejo  = DB.clientes.find(c => c.id === credito.clienteId);
+  const clienteNuevo  = DB.clientes.find(c => c.id === nuevoClienteId);
+
+  if (!confirm(
+    `¿Confirmar reasignación?\n\n` +
+    `De: ${clienteViejo?.nombre}\n` +
+    `A:  ${clienteNuevo?.nombre}\n\n` +
+    `Crédito: ${fmt(credito.montoPrestado)} — Saldo: ${fmt(credito.saldoPendiente)}`
+  )) return;
+
+  // Aplicar cambio
+  credito.clienteId     = nuevoClienteId;
+  credito.reasignadoEn  = new Date().toISOString();
+  credito.reasignadoDe  = clienteViejo?.nombre;
+
+  guardarDB();
+  renderAll();
+  closeModal('modalReasignar');
+  toast(`✅ Crédito reasignado a ${clienteNuevo?.nombre}`);
+  logInfo(`Crédito reasignado de "${clienteViejo?.nombre}" a "${clienteNuevo?.nombre}"`);
+}
+
+
 function confirmarEliminarCliente(clienteId, nombre, totalCreditos) {
   const credActivos = DB.creditos.filter(c => c.clienteId === clienteId && c.estado === 'activo');
 
@@ -2597,6 +2733,32 @@ function onPINInput(val) {
   pinBuffer = val.replace(/\D/g,'').slice(0,4);
   actualizarDots();
   if (pinBuffer.length === 4) verificarPIN();
+}
+
+function actualizarDots() {
+  document.querySelectorAll('.pin-dot').forEach((d, i) => {
+    d.classList.toggle('filled', i < pinBuffer.length);
+    d.classList.remove('error');
+  });
+}
+
+function verificarPIN() {
+  const pin = localStorage.getItem('creditoapp_pin');
+  if (pinBuffer === pin) {
+    document.getElementById('modalPIN').classList.remove('open');
+    pinBuffer = '';
+  } else {
+    document.querySelectorAll('.pin-dot').forEach(d => {
+      d.classList.remove('filled');
+      d.classList.add('error');
+    });
+    document.getElementById('pin-error').textContent = 'PIN incorrecto. Intenta de nuevo.';
+    setTimeout(() => {
+      pinBuffer = '';
+      actualizarDots();
+    }, 800);
+  }
+}
 }
 
 function actualizarDots() {
@@ -2885,8 +3047,515 @@ function generarInforme() {
         </div>
       </div>
     </div>
+  <!-- SEMÁFORO DE CARTERA -->
+    <div class="card informe-section">
+      <div class="card-header"><span class="card-title">🚦 Estado de Cartera Activa</span></div>
+      <div style="padding:20px">
+        <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:16px">
+          ${['verde','amarillo','naranja','rojo'].map(s => {
+            const count = activos.filter(c => c.semaforo === s).length;
+            const cap   = activos.filter(c => c.semaforo === s).reduce((x,c) => x+c.saldoPendiente,0);
+            const labels = {verde:'🟢 Al día',amarillo:'🟡 Alerta',naranja:'🟠 Mora',rojo:'🔴 Crítico'};
+            return `<div class="kpi-box">
+              <div class="kpi-num">${count}</div>
+              <div class="kpi-lbl">${labels[s]}</div>
+              <div style="font-family:var(--mono);font-size:11px;color:var(--muted);margin-top:4px">${fmt(cap)}</div>
+            </div>`;
+          }).join('')}
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px">
+          ${Object.entries(porFrec).map(([frec, lista]) => {
+            const cap = lista.reduce((s,c) => s+c.saldoPendiente,0);
+            return `<div class="kpi-box">
+              <div class="kpi-num">${lista.length}</div>
+              <div class="kpi-lbl">Pago ${frec}</div>
+              <div style="font-family:var(--mono);font-size:11px;color:var(--muted);margin-top:4px">${fmt(cap)}</div>
+            </div>`;
+          }).join('')}
+        </div>
+      </div>
+    </div>
 
-    <!-- SEMÁFORO DE CARTERA -->
+    <!-- RECAUDO POR MÉTODO -->
+    <div class="card informe-section">
+      <div class="card-header"><span class="card-title">💳 Recaudo por Método de Pago</span></div>
+      <div class="chart-bar-wrap">
+        ${Object.entries(porMetodo).length === 0
+          ? `<div style="color:var(--muted);font-size:13px;padding:8px">Sin abonos en este período</div>`
+          : Object.entries(porMetodo)
+              .sort((a,b) => b[1]-a[1])
+              .map(([met, val]) => {
+                const pct = Math.round((val / maxMetodo) * 100);
+                const colors = { efectivo:'#22c55e', transferencia:'#3b82f6', nequi:'#a855f7', daviplata:'#f97316' };
+                const col = colors[met] || '#6366f1';
+                return `<div class="chart-row">
+                  <div class="chart-label">${met.charAt(0).toUpperCase()+met.slice(1)}</div>
+                  <div class="chart-track">
+                    <div class="chart-fill" style="width:${pct}%;background:${col}">${pct > 20 ? Math.round(val/1000)+'k' : ''}</div>
+                  </div>
+                  <div class="chart-val">${fmt(val)}</div>
+                </div>`;
+              }).join('')
+        }
+      </div>
+    </div>
+
+    <!-- TOP DEUDORES -->
+    <div class="card informe-section">
+      <div class="card-header"><span class="card-title">👥 Top Deudores por Saldo Pendiente</span></div>
+      ${topDeudores.length === 0
+        ? `<div style="padding:20px;color:var(--muted);font-size:13px">Sin créditos activos</div>`
+        : `<div class="chart-bar-wrap">
+            ${topDeudores.map(c => {
+              const cl  = DB.clientes.find(x => x.id === c.clienteId);
+              const pct = Math.round((c.saldoPendiente / maxDeudor) * 100);
+              const col = { verde:'#22c55e', amarillo:'#eab308', naranja:'#f97316', rojo:'#ef4444' }[c.semaforo];
+              return `<div class="chart-row">
+                <div class="chart-label">${cl?.nombre || '—'}</div>
+                <div class="chart-track">
+                  <div class="chart-fill" style="width:${pct}%;background:${col}">${pct > 20 ? Math.round(c.saldoPendiente/1000)+'k' : ''}</div>
+                </div>
+                <div class="chart-val">${fmt(c.saldoPendiente)}</div>
+              </div>`;
+            }).join('')}
+          </div>`
+      }
+    </div>
+
+    <!-- CRÉDITOS EN MORA -->
+    ${criticos.length > 0 ? `
+    <div class="card informe-section">
+      <div class="card-header"><span class="card-title">⚠️ Créditos en Mora — Acción Requerida</span></div>
+      <table>
+        <thead>
+          <tr>
+            <th>Cliente</th>
+            <th>Teléfono</th>
+            <th>Frecuencia</th>
+            <th>Cuota</th>
+            <th>Saldo</th>
+            <th>Días mora</th>
+            <th>Estado</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${criticos.map(c => {
+            const cl = DB.clientes.find(x => x.id === c.clienteId);
+            return `<tr>
+              <td><strong>${cl?.nombre || '—'}</strong></td>
+              <td class="mono">${cl?.telefono || '—'}</td>
+              <td><span class="badge badge-blue">${c.frecuenciaPago}</span></td>
+              <td class="mono">${fmt(c.cuotaValor)}</td>
+              <td class="mono">${fmt(c.saldoPendiente)}</td>
+              <td><span class="badge badge-rojo">${c.diasMora || 0} días</span></td>
+              <td><span class="badge badge-${c.semaforo}">${semaforoLabel(c.semaforo)}</span></td>
+            </tr>`;
+          }).join('')}
+        </tbody>
+      </table>
+    </div>` : ''}
+
+    <!-- DETALLE COMPLETO CRÉDITOS PERÍODO -->
+    <div class="card informe-section">
+      <div class="card-header">
+        <span class="card-title">📋 Créditos Otorgados en el Período (${creditosPer.length})</span>
+      </div>
+      ${creditosPer.length === 0
+        ? `<div style="padding:20px;color:var(--muted);font-size:13px">Sin créditos en este período</div>`
+        : `<table>
+            <thead>
+              <tr>
+                <th>Cliente</th>
+                <th>Fecha</th>
+                <th>Monto</th>
+                <th>Interés</th>
+                <th>Total</th>
+                <th>Cuota</th>
+                <th>Frec.</th>
+                <th>Saldo</th>
+                <th>Estado</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${creditosPer.map(c => {
+                const cl = DB.clientes.find(x => x.id === c.clienteId);
+                const fecha = new Date(c.createdAt).toLocaleDateString('es-CO',{day:'2-digit',month:'short',year:'2-digit'});
+                return `<tr>
+                  <td><strong>${cl?.nombre || '—'}</strong></td>
+                  <td class="mono" style="font-size:11px">${fecha}</td>
+                  <td class="mono">${fmt(c.montoPrestado)}</td>
+                  <td class="mono" style="color:var(--yellow)">${fmt(c.totalInteres)}</td>
+                  <td class="mono">${fmt(c.totalAPagar)}</td>
+                  <td class="mono">${fmt(c.cuotaValor)}</td>
+                  <td><span class="badge badge-blue">${c.frecuenciaPago}</span></td>
+                  <td class="mono">${fmt(c.saldoPendiente)}</td>
+                  <td><span class="badge badge-${c.estado === 'cancelado' ? 'verde' : c.semaforo}">${c.estado === 'cancelado' ? '✓ Pagado' : semaforoLabel(c.semaforo)}</span></td>
+                </tr>`;
+              }).join('')}
+            </tbody>
+          </table>`
+      }
+    </div>
+
+    <!-- PIE DEL INFORME -->
+    <div style="text-align:center;padding:16px;font-size:11px;color:var(--muted);border-top:1px solid var(--border);margin-top:8px">
+      ${DB.config.nombre || 'CréditoApp'} · Informe generado el ${ahora.toLocaleString('es-CO')} · Período: ${labelPer}
+    </div>
+  `;
+}
+
+function exportarPDF() {
+  generarInforme();
+  setTimeout(() => window.print(), 150);
+}
+
+function exportarCSV() {
+  const desde   = getFechaDesde(periodoMeses);
+  const credPer = DB.creditos.filter(c => new Date(c.createdAt) >= desde);
+
+  const rows = [
+    ['Cliente','Cédula','Teléfono','Fecha','Monto','Tasa%','Interés','Total','Cuota','Frecuencia','Cuotas','Saldo','Estado','Semáforo']
+  ];
+
+  credPer.forEach(c => {
+    const cl = DB.clientes.find(x => x.id === c.clienteId);
+    rows.push([
+      cl?.nombre || '',
+      cl?.cedula || '',
+      cl?.telefono || '',
+      new Date(c.createdAt).toLocaleDateString('es-CO'),
+      c.montoPrestado,
+      c.tasaInteres,
+      c.totalInteres,
+      c.totalAPagar,
+      c.cuotaValor,
+      c.frecuenciaPago,
+      c.plazoCuotas,
+      c.saldoPendiente,
+      c.estado,
+      c.semaforo
+    ]);
+  });
+
+  const csv = rows.map(r =>
+    r.map(v => `"${String(v).replace(/"/g,'""')}"`).join(',')
+  ).join('\n');
+
+  const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' });
+  const a    = document.createElement('a');
+  a.href     = URL.createObjectURL(blob);
+  const label = periodoMeses === 0 ? 'historico' : `${periodoMeses}meses`;
+  a.download = `informe_creditos_${label}_${new Date().toISOString().split('T')[0]}.csv`;
+  a.click();
+  toast('⬇️ CSV descargado');
+}
+
+
+let chatHistory = [];
+let errorLog    = [];
+
+// Capturar errores del sistema globalmente
+window.addEventListener('error', e => {
+  logError(`JS Error: ${e.message} (${e.filename}:${e.lineno})`);
+});
+
+function logError(msg) {
+  const ts = new Date().toLocaleTimeString('es-CO');
+  errorLog.push({ ts, msg });
+  const log = document.getElementById('error-log');
+  if (log) {
+    log.innerHTML += `<span style="color:var(--red)">✗</span> [${ts}] ${msg}<br>`;
+    log.scrollTop = log.scrollHeight;
+  }
+}
+
+function logInfo(msg) {
+  const ts = new Date().toLocaleTimeString('es-CO');
+  const log = document.getElementById('error-log');
+  if (log) {
+    log.innerHTML += `<span style="color:var(--green)">✓</span> [${ts}] ${msg}<br>`;
+    log.scrollTop = log.scrollHeight;
+  }
+}
+
+function actualizarContextoUI() {
+  const activos = DB.creditos.filter(c => c.estado === 'activo');
+  const mora    = activos.filter(c => c.semaforo === 'rojo').length;
+  document.getElementById('ctx-clientes').textContent = DB.clientes.length;
+  document.getElementById('ctx-creditos').textContent = activos.length;
+  document.getElementById('ctx-abonos').textContent   = DB.abonos.length;
+  document.getElementById('ctx-mora').textContent     = mora;
+}
+
+function construirContextoSistema() {
+  const incluirData   = document.getElementById('ctx-include-data')?.checked;
+  const incluirErrors = document.getElementById('ctx-include-errors')?.checked;
+
+  const activos = DB.creditos.filter(c => c.estado === 'activo');
+
+  let ctx = `Eres el asistente de soporte técnico y financiero de CréditoApp, un sistema de gestión de microcréditos.
+
+ARQUITECTURA DEL SISTEMA:
+- Frontend: PWA (HTML/CSS/JS vanilla, localStorage para persistencia)
+- Lógica financiera: Interés plano sobre capital → Interés = Monto × (Tasa / 100) — la tasa se aplica UNA SOLA VEZ sobre el capital sin importar plazo ni frecuencia
+- Fórmula cuota: (Monto + Interés) / Número de cuotas
+- Frecuencias: diario (×1), semanal (×7), quincenal (×15)
+- Semáforo: verde=al día, amarillo=1-3d mora, naranja=4-9d mora, rojo=10+d mora (ajustado por frecuencia)
+
+FECHA ACTUAL: ${new Date().toLocaleDateString('es-CO', { weekday:'long', year:'numeric', month:'long', day:'numeric' })}
+`;
+
+  if (incluirData) {
+    ctx += `
+ESTADO ACTUAL DEL SISTEMA:
+- Total clientes: ${DB.clientes.length}
+- Créditos activos: ${activos.length}
+- Créditos cancelados: ${DB.creditos.filter(c => c.estado === 'cancelado').length}
+- Total abonos: ${DB.abonos.length}
+- Capital en calle: ${activos.reduce((s,c) => s + c.saldoPendiente, 0).toLocaleString('es-CO')}
+- Semáforo: verde=${activos.filter(c=>c.semaforo==='verde').length}, amarillo=${activos.filter(c=>c.semaforo==='amarillo').length}, naranja=${activos.filter(c=>c.semaforo==='naranja').length}, rojo=${activos.filter(c=>c.semaforo==='rojo').length}
+
+CRÉDITOS ACTIVOS (muestra):
+${activos.slice(0,10).map(c => {
+  const cl = DB.clientes.find(x => x.id === c.clienteId);
+  return `  • ${cl?.nombre || 'N/A'} | Monto: $${c.montoPrestado.toLocaleString()} | Tasa: ${c.tasaInteres}% | Frec: ${c.frecuenciaPago} | Cuota: $${c.cuotaValor.toLocaleString()} | Saldo: $${c.saldoPendiente.toLocaleString()} | Semáforo: ${c.semaforo} | Cuotas: ${c.cuotasPagadas}/${c.plazoCuotas}`;
+}).join('\n')}
+
+ABONOS RECIENTES (últimos 5):
+${[...DB.abonos].sort((a,b) => new Date(b.createdAt)-new Date(a.createdAt)).slice(0,5).map(a => {
+  const cr = DB.creditos.find(c => c.id === a.creditoId);
+  const cl = cr ? DB.clientes.find(c => c.id === cr.clienteId) : null;
+  return `  • ${cl?.nombre || 'N/A'} | $${a.monto.toLocaleString()} | ${a.metodoPago} | Mora: ${a.diasMora}d | ${new Date(a.fechaPago).toLocaleDateString('es-CO')}`;
+}).join('\n')}
+`;
+  }
+
+  if (incluirErrors && errorLog.length > 0) {
+    ctx += `
+ERRORES REGISTRADOS EN SESIÓN:
+${errorLog.slice(-5).map(e => `  [${e.ts}] ${e.msg}`).join('\n')}
+`;
+  }
+
+  ctx += `
+INSTRUCCIONES DE RESPUESTA:
+- Responde siempre en español
+- Sé conciso y técnico pero claro
+- Si detectas un bug, explica la causa raíz y da el código corregido
+- Si hay inconsistencia en datos, señala el registro específico (cliente/crédito)
+- Usa formato con emojis para mejorar legibilidad
+- Si la corrección requiere código, usa bloques de código con la función exacta a reemplazar
+- Nunca inventes datos que no estén en el contexto proporcionado
+`;
+
+  return ctx;
+}
+
+async function enviarMensaje() {
+  const input = document.getElementById('chat-input');
+  const texto = input.value.trim();
+  if (!texto) return;
+
+  input.value = '';
+  agregarMensajeChat('user', texto);
+  await llamarClaudeIA(texto);
+}
+
+function preguntaRapida(texto) {
+  document.getElementById('chat-input').value = texto;
+  enviarMensaje();
+  // Asegurarse de estar en la pestaña soporte
+}
+
+function agregarMensajeChat(rol, contenido) {
+  const container = document.getElementById('chat-messages');
+  const ts = new Date().toLocaleTimeString('es-CO', { hour:'2-digit', minute:'2-digit' });
+
+  const wrapper = document.createElement('div');
+  wrapper.className = rol === 'user' ? 'msg-user' : 'msg-ai';
+
+  if (rol === 'user') {
+    wrapper.innerHTML = `
+      <div>
+        <div class="msg-bubble msg-bubble-user">${escapeHtml(contenido)}</div>
+        <div class="msg-time" style="text-align:right">${ts}</div>
+      </div>`;
+  } else {
+    wrapper.innerHTML = `
+      <div style="max-width:85%">
+        <div class="msg-bubble msg-bubble-ai">${formatearRespuestaIA(contenido)}</div>
+        <div class="msg-time">${ts}</div>
+      </div>`;
+  }
+
+  container.appendChild(wrapper);
+  container.scrollTop = container.scrollHeight;
+
+  chatHistory.push({ role: rol === 'user' ? 'user' : 'assistant', content: contenido });
+}
+
+function mostrarThinking() {
+  const container = document.getElementById('chat-messages');
+  const el = document.createElement('div');
+  el.className = 'msg-thinking';
+  el.id = 'thinking-indicator';
+  el.innerHTML = `
+    <div class="dots">
+      <span></span><span></span><span></span>
+    </div>
+    <span>Analizando el sistema...</span>`;
+  container.appendChild(el);
+  container.scrollTop = container.scrollHeight;
+}
+
+function quitarThinking() {
+  document.getElementById('thinking-indicator')?.remove();
+}
+
+function setEstadoSoporte(estado, color = 'var(--muted)') {
+  const el = document.getElementById('soporte-status');
+  if (el) { el.textContent = estado; el.style.color = color; }
+}
+
+async function llamarClaudeIA(pregunta) {
+  const btnEnviar = document.getElementById('btn-enviar');
+  const inputChat = document.getElementById('chat-input');
+
+  // Verificar URL del proxy configurada
+  const apiUrl = DB.config.apiUrl || '';
+  if (!apiUrl) {
+    quitarThinking();
+    agregarMensajeChat('assistant',
+      '⚙️ **Configura la URL del servidor** primero.\n\n' +
+      'Ve a **Configuración → Soporte IA** e ingresa la URL de tu servidor proxy.\n\n' +
+      'Si estás en desarrollo local usa: `http://localhost:3001`'
+    );
+    setEstadoSoporte('● Sin configurar', 'var(--red)');
+    return;
+  }
+
+  btnEnviar.disabled    = true;
+  inputChat.disabled    = true;
+  btnEnviar.textContent = '⏳';
+  setEstadoSoporte('● Analizando...', 'var(--yellow)');
+  mostrarThinking();
+  actualizarContextoUI();
+
+  const systemPrompt      = construirContextoSistema();
+  const historialLimitado = chatHistory.slice(-8);
+  const messages = [
+    ...historialLimitado,
+    { role: 'user', content: pregunta }
+  ];
+
+  try {
+    const response = await fetch(`${apiUrl.replace(/\/$/, '')}/api/chat`, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ messages, system: systemPrompt })
+    });
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      throw new Error(data.error || `HTTP ${response.status}`);
+    }
+
+    const respuesta = (data.content || [])
+      .filter(b => b.type === 'text')
+      .map(b => b.text)
+      .join('\n');
+
+    quitarThinking();
+    agregarMensajeChat('assistant', respuesta);
+    setEstadoSoporte('● Listo para ayudar', 'var(--green)');
+
+    // Mostrar tokens si están disponibles
+    if (data.usage) {
+      logInfo(`Tokens: ${data.usage.input_tokens} entrada / ${data.usage.output_tokens} salida`);
+    }
+    logInfo(`Consulta resuelta: "${pregunta.slice(0,40)}..."`);
+
+  } catch (err) {
+    quitarThinking();
+    let msgError = '';
+    if (err.message.includes('Failed to fetch') || err.message.includes('NetworkError')) {
+      msgError = '🔌 No se pudo conectar al servidor.\n\n**Verifica:**\n• ¿Está corriendo `npm start` en el servidor?\n• ¿La URL en Configuración es correcta?';
+    } else if (err.message.includes('401')) {
+      msgError = '🔑 API Key inválida. Revisa el archivo `.env` del servidor.';
+    } else if (err.message.includes('429')) {
+      msgError = '⏳ Límite de peticiones alcanzado. Espera un momento e intenta de nuevo.';
+    } else {
+      msgError = `❌ Error: ${err.message}`;
+    }
+    agregarMensajeChat('assistant', msgError);
+    setEstadoSoporte('● Error de conexión', 'var(--red)');
+    logError(`API Error: ${err.message}`);
+  } finally {
+    btnEnviar.disabled    = false;
+    inputChat.disabled    = false;
+    btnEnviar.textContent = '➤';
+    inputChat.focus();
+  }
+}
+
+function formatearRespuestaIA(texto) {
+  // Convertir markdown básico a HTML
+  return texto
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+    .replace(/```(\w*)\n?([\s\S]*?)```/g, '<pre>$2</pre>')
+    .replace(/`([^`]+)`/g, '<code>$1</code>')
+    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+    .replace(/\*([^*]+)\*/g, '<em>$1</em>')
+    .replace(/\n/g, '<br>');
+}
+
+function escapeHtml(t) {
+  return t.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+function limpiarChat() {
+  chatHistory = [];
+  const container = document.getElementById('chat-messages');
+  container.innerHTML = `
+    <div class="msg-ai">
+      <div class="msg-bubble msg-bubble-ai">
+        Chat limpiado. ¿En qué puedo ayudarte? 🤖
+      </div>
+    </div>`;
+  logInfo('Chat limpiado por el usuario');
+}
+
+async function testConexionIA() {
+  const url    = document.getElementById('cfg-api-url')?.value.trim();
+  const result = document.getElementById('api-test-result');
+  const badge  = document.getElementById('api-connection-badge');
+
+  if (!url) {
+    if (result) result.innerHTML = '<span style="color:var(--red)">❌ Ingresa una URL primero</span>';
+    return;
+  }
+
+  if (result) result.innerHTML = '<span style="color:var(--yellow)">⏳ Verificando conexión...</span>';
+  if (badge)  { badge.className = 'badge badge-gray'; badge.textContent = 'Verificando...'; }
+
+  try {
+    const r = await fetch(`${url.replace(/\/$/, '')}/health`, {
+      signal: AbortSignal.timeout(6000)
+    });
+    const d = await r.json();
+
+    if (r.ok && d.status === 'ok') {
+      if (result) result.innerHTML = `<span style="color:var(--green)">✅ Servidor conectado — ${d.service || 'CréditoApp AI Proxy'}</span>`;
+      if (badge)  { badge.className = 'badge badge-verde'; badge.textContent = '● Conectado'; }
+      DB.config.apiUrl = url;
+      guardarDB();
+      toast('✅ Soporte IA activado correctamente');
+    } else {
+      throw new Error('El servidor respondió pero no es el proxy esperado');
+    }
+  } catch (err) {
+   <!-- SEMÁFORO DE CARTERA -->
     <div class="card informe-section">
       <div class="card-header"><span class="card-title">🚦 Estado de Cartera Activa</span></div>
       <div style="padding:20px">
