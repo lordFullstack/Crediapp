@@ -1536,6 +1536,24 @@
   </div>
 </div>
 
+<!-- MODAL ESTADO DE CUENTA -->
+<div class="modal-overlay" id="modalEstadoCuenta">
+  <div class="modal" style="max-width:640px">
+    <div class="modal-header">
+      <span class="modal-title" id="ec-titulo">📊 Estado de Cuenta</span>
+      <button class="modal-close" onclick="closeModal('modalEstadoCuenta')">✕</button>
+    </div>
+    <div class="modal-body">
+      <div id="ec-contenido"></div>
+      <div class="receipt-actions" style="margin-top:16px;display:flex;gap:8px">
+        <button class="btn btn-ghost btn-sm" style="flex:1" onclick="descargarEstadoCuenta()">⬇️ Descargar</button>
+        <button class="btn btn-ghost btn-sm" style="flex:1" onclick="generarPDFEstadoCuenta()">🖨️ Generar PDF</button>
+        <button class="btn btn-green btn-sm" style="flex:1" onclick="enviarEstadoCuentaWhatsApp()">📤 WhatsApp</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <!-- MODAL PIN LOCK -->
 <div class="modal-overlay open" id="modalPIN" style="background:rgba(0,0,0,0.95);z-index:9999">
   <div class="modal" style="max-width:320px;text-align:center">
@@ -1552,16 +1570,8 @@
       <input type="password" id="pin-input" maxlength="4" inputmode="numeric"
         style="opacity:0;position:absolute;pointer-events:none"
         oninput="onPINInput(this.value)">
-      <!-- Teclado numérico -->
-      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;max-width:220px;margin:0 auto">
-        ${[1,2,3,4,5,6,7,8,9,'',0,'⌫'].map(n => `
-          <button onclick="${n==='⌫' ? 'pinBorrar()' : n==='' ? '' : `pinDigito(${n})`}"
-            class="btn btn-ghost"
-            style="aspect-ratio:1;font-size:20px;font-weight:600;border-radius:50%;${n==='' ? 'visibility:hidden' : ''}"
-            ${n==='' ? 'disabled' : ''}>
-            ${n}
-          </button>`).join('')}
-      </div>
+      <!-- Teclado numérico (generado por JS, ver renderPinPad() en el script) -->
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;max-width:220px;margin:0 auto" id="pin-pad"></div>
       <div id="pin-error" style="font-size:12px;color:var(--red);margin-top:16px;min-height:18px"></div>
     </div>
   </div>
@@ -1994,6 +2004,7 @@ function renderClientes(filtro = '') {
       <td><span class="badge ${cl.estado === 'activo' ? 'badge-verde' : 'badge-gray'}">${cl.estado}</span></td>
       <td>
         <div class="actions-td">
+          <button class="btn btn-ghost btn-sm" onclick="verEstadoCuenta('${cl.id}')" title="Estado de cuenta">📊</button>
           <button class="btn btn-ghost btn-sm" onclick="editarCliente('${cl.id}')">✏️</button>
           <button class="btn btn-sm" style="background:rgba(239,68,68,0.1);color:var(--red);border:1px solid rgba(239,68,68,0.2)"
             onclick="confirmarEliminarCliente('${cl.id}','${cl.nombre.replace(/'/g,"\\'")}',${totalCreditos})">🗑</button>
@@ -2001,6 +2012,192 @@ function renderClientes(filtro = '') {
       </td>
     </tr>`;
   }).join('');
+}
+
+function verEstadoCuenta(clienteId) {
+  const cliente = DB.clientes.find(c => c.id === clienteId);
+  if (!cliente) return;
+
+  const creditos = DB.creditos
+    .filter(c => c.clienteId === clienteId)
+    .sort((a,b) => new Date(b.fechaInicio) - new Date(a.fechaInicio));
+
+  const saldoTotal = creditos
+    .filter(c => c.estado === 'activo')
+    .reduce((s,c) => s + c.saldoPendiente, 0);
+
+  document.getElementById('ec-titulo').textContent = `📊 Estado de Cuenta — ${cliente.nombre}`;
+  window.ecClienteId = clienteId;
+
+  if (creditos.length === 0) {
+    document.getElementById('ec-contenido').innerHTML = `
+      <div class="empty"><div class="empty-icon">📭</div><div class="empty-text">Este cliente aún no tiene créditos registrados.</div></div>`;
+    openModal('modalEstadoCuenta');
+    return;
+  }
+
+  // Resumen de saldo (casilla separada, como se pidió)
+  const resumenHTML = `
+    <div style="display:flex;gap:12px;margin-bottom:20px">
+      <div style="flex:1;background:rgba(59,130,246,0.1);border:1px solid rgba(59,130,246,0.25);border-radius:10px;padding:14px">
+        <div style="font-size:11px;color:var(--muted)">SALDO TOTAL PENDIENTE</div>
+        <div style="font-size:22px;font-weight:700;color:var(--accent)">${fmt(saldoTotal)}</div>
+      </div>
+      <div style="flex:1;background:var(--card);border:1px solid var(--border);border-radius:10px;padding:14px">
+        <div style="font-size:11px;color:var(--muted)">CRÉDITOS TOTALES</div>
+        <div style="font-size:22px;font-weight:700">${creditos.length}</div>
+      </div>
+    </div>`;
+
+  // Bloque por cada crédito: fechas de inicio/fin proyectada y proyección de cuota final
+  const creditosHTML = creditos.map(cr => {
+    const inicio = new Date(cr.fechaInicio).toLocaleDateString('es-CO', { day:'2-digit', month:'short', year:'numeric' });
+    const fin    = new Date(cr.fechaVencimiento).toLocaleDateString('es-CO', { day:'2-digit', month:'short', year:'numeric' });
+    const frecLabel = { diario:'Diario', semanal:'Semanal', quincenal:'Quincenal', mensual:'Mensual' }[cr.frecuenciaPago];
+    const estadoBadge = cr.estado === 'activo'
+      ? `<span class="badge badge-${cr.semaforo === 'verde' ? 'verde' : cr.semaforo === 'amarillo' ? 'amarillo' : cr.semaforo === 'naranja' ? 'naranja' : 'rojo'}">${semaforoLabel(cr.semaforo)}</span>`
+      : `<span class="badge badge-gray">Pagado</span>`;
+
+    return `
+      <div style="border:1px solid var(--border);border-radius:10px;padding:14px;margin-bottom:12px">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+          <strong>${fmt(cr.montoPrestado)} · ${frecLabel} · ${cr.tasaInteres}%</strong>
+          ${estadoBadge}
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:12px;color:var(--muted)">
+          <div>📅 Inicio: <span style="color:var(--text)">${inicio}</span></div>
+          <div>🏁 Finalización proyectada: <span style="color:var(--text)">${fin}</span></div>
+          <div>💳 Cuota: <span style="color:var(--text)">${fmt(cr.cuotaValor)}</span></div>
+          <div>📊 Progreso: <span style="color:var(--text)">${cr.cuotasPagadas}/${cr.plazoCuotas} cuotas</span></div>
+          <div>💰 Saldo pendiente: <span style="color:var(--text)">${fmt(cr.saldoPendiente)}</span></div>
+          <div>🎯 Total a pagar: <span style="color:var(--text)">${fmt(cr.totalAPagar)}</span></div>
+        </div>
+      </div>`;
+  }).join('');
+
+  // Log completo de abonos de todos los créditos de este cliente
+  const creditoIds = creditos.map(c => c.id);
+  const abonosCliente = DB.abonos
+    .filter(a => creditoIds.includes(a.creditoId))
+    .sort((a,b) => new Date(b.fechaPago) - new Date(a.fechaPago));
+
+  const logHTML = abonosCliente.length === 0
+    ? `<div class="empty" style="padding:20px"><div class="empty-text">Sin abonos registrados aún.</div></div>`
+    : `<table>
+        <thead><tr><th>Fecha</th><th>Monto</th><th>Método</th><th>Mora</th></tr></thead>
+        <tbody>
+          ${abonosCliente.map(a => {
+            const fecha = new Date(a.fechaPago).toLocaleDateString('es-CO', { day:'2-digit', month:'short', year:'numeric' });
+            return `<tr>
+              <td class="mono" style="font-size:11px">${fecha}</td>
+              <td class="mono">${fmt(a.monto)}</td>
+              <td><span class="badge badge-blue">${a.metodoPago}</span></td>
+              <td>${a.diasMora > 0 ? `<span class="badge badge-rojo">${a.diasMora}d</span>` : '<span class="badge badge-verde">Al día</span>'}</td>
+            </tr>`;
+          }).join('')}
+        </tbody>
+      </table>`;
+
+  document.getElementById('ec-contenido').innerHTML = `
+    ${resumenHTML}
+    <div style="font-size:13px;font-weight:600;margin-bottom:8px">Créditos</div>
+    ${creditosHTML}
+    <div style="font-size:13px;font-weight:600;margin:20px 0 8px">📜 Log de Abonos</div>
+    ${logHTML}
+  `;
+
+  openModal('modalEstadoCuenta');
+}
+
+function construirHTMLEstadoCuenta(cliente, contenidoHTML) {
+  return `
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <meta charset="UTF-8">
+      <title>Estado de Cuenta - ${cliente.nombre}</title>
+      <style>
+        body { font-family: Arial, sans-serif; color:#111; padding:24px; max-width:700px; margin:0 auto; }
+        h1 { font-size:18px; margin-bottom:4px; }
+        .sub { color:#666; font-size:12px; margin-bottom:20px; }
+        table { width:100%; border-collapse:collapse; margin-top:8px; }
+        th, td { padding:6px 8px; border-bottom:1px solid #ddd; text-align:left; font-size:12px; }
+        th { background:#f3f4f6; }
+        .badge { display:inline-block; padding:2px 8px; border-radius:10px; font-size:10px; font-weight:600; }
+        .badge-verde{background:#dcfce7;color:#16a34a} .badge-amarillo{background:#fef9c3;color:#ca8a04}
+        .badge-naranja{background:#ffedd5;color:#ea580c} .badge-rojo{background:#fee2e2;color:#dc2626}
+        .badge-blue{background:#dbeafe;color:#2563eb} .badge-gray{background:#f1f5f9;color:#64748b}
+        @media print { body { padding:0; } }
+      </style>
+    </head>
+    <body>
+      <h1>${DB.config.nombre || 'CréditoApp'} — Estado de Cuenta</h1>
+      <div class="sub">Cliente: ${cliente.nombre} · Cédula: ${cliente.cedula} · Generado: ${new Date().toLocaleString('es-CO')}</div>
+      ${contenidoHTML}
+    </body>
+    </html>
+  `;
+}
+
+function generarPDFEstadoCuenta() {
+  const clienteId = window.ecClienteId;
+  const cliente = DB.clientes.find(c => c.id === clienteId);
+  if (!cliente) return;
+
+  const contenidoHTML = document.getElementById('ec-contenido').innerHTML;
+  const html = construirHTMLEstadoCuenta(cliente, contenidoHTML);
+  const win = window.open('', '_blank');
+  win.document.write(html);
+  win.document.close();
+  setTimeout(() => win.print(), 400);
+}
+
+function descargarEstadoCuenta() {
+  const clienteId = window.ecClienteId;
+  const cliente = DB.clientes.find(c => c.id === clienteId);
+  if (!cliente) return;
+
+  const contenidoHTML = document.getElementById('ec-contenido').innerHTML;
+  const html = construirHTMLEstadoCuenta(cliente, contenidoHTML);
+  const blob = new Blob([html], { type: 'text/html' });
+  const nombreArchivo = cliente.nombre.trim().replace(/\s+/g,'_').toLowerCase();
+  const fecha = new Date().toISOString().split('T')[0];
+
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `estado_cuenta_${nombreArchivo}_${fecha}.html`;
+  a.click();
+  toast('⬇️ Estado de cuenta descargado');
+}
+
+function enviarEstadoCuentaWhatsApp() {
+  const clienteId = window.ecClienteId;
+  const cliente = DB.clientes.find(c => c.id === clienteId);
+  if (!cliente) return;
+
+  const creditos = DB.creditos.filter(c => c.clienteId === clienteId);
+  const activos = creditos.filter(c => c.estado === 'activo');
+  const saldoTotal = activos.reduce((s,c) => s + c.saldoPendiente, 0);
+
+  let detalle = activos.map(c => {
+    const frecLabel = { diario:'diaria', semanal:'semanal', quincenal:'quincenal', mensual:'mensual' }[c.frecuenciaPago];
+    const prox = new Date(c.proximaCuota).toLocaleDateString('es-CO');
+    return `• Crédito ${fmt(c.montoPrestado)} — cuota ${frecLabel} ${fmt(c.cuotaValor)} — saldo ${fmt(c.saldoPendiente)} — próx. pago ${prox}`;
+  }).join('\n');
+
+  if (!detalle) detalle = 'Sin créditos activos.';
+
+  const msg = encodeURIComponent(
+    `📊 *Estado de Cuenta*\n` +
+    `📋 *${DB.config.nombre}*\n\n` +
+    `👤 Cliente: ${cliente.nombre}\n` +
+    `💰 Saldo total pendiente: ${fmt(saldoTotal)}\n\n` +
+    `${detalle}\n\n` +
+    `_Generado el ${new Date().toLocaleDateString('es-CO')}_`
+  );
+
+  const tel = cliente.telefono.replace(/\D/g,'');
+  window.open(`https://wa.me/57${tel}?text=${msg}`, '_blank');
 }
 
 function renderAbonos() {
@@ -2775,7 +2972,20 @@ function closeSidebar() {
 let pinBuffer = '';
 let deferredInstallPrompt = null;
 
+function renderPinPad() {
+  const pad = document.getElementById('pin-pad');
+  if (!pad || pad.childElementCount) return;
+  const teclas = [1,2,3,4,5,6,7,8,9,'',0,'⌫'];
+  pad.innerHTML = teclas.map(n => {
+    if (n === '') return `<button class="btn btn-ghost" style="aspect-ratio:1;visibility:hidden" disabled></button>`;
+    const accion = n === '⌫' ? 'pinBorrar()' : `pinDigito(${n})`;
+    return `<button onclick="${accion}" class="btn btn-ghost"
+              style="aspect-ratio:1;font-size:20px;font-weight:600;border-radius:50%">${n}</button>`;
+  }).join('');
+}
+
 function initPIN() {
+  renderPinPad();
   const pin = localStorage.getItem('creditoapp_pin');
   const modal = document.getElementById('modalPIN');
   const nombre = document.getElementById('pin-app-name');
